@@ -28,3 +28,5 @@ for freq, fn in rev_freqs:
   t += freq
   important.append((freq, fn))
   mods.add(f_to_mod[fn])
+print(len(important))
+print(len(mods))

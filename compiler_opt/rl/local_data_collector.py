@@ -179,6 +179,18 @@ class LocalDataCollector(data_collector.DataCollector):
 
     self._reset_workers = self._pool.submit(wrapup)
 
+    seen = set()
+    removed = 0
+    total = 0
+    for _, res in successful_work:
+      for k, seq_ex in zip(res.keys, res.serialized_sequence_examples):
+        total += 1
+        if k in seen:
+          res.keys.remove(k)
+          res.serialized_sequence_examples.remove(seq_ex)
+          removed += 1
+        seen.add(k)
+    logging.info('removed %d duplicates out of %d', removed, total)
     sequence_examples = list(
         itertools.chain.from_iterable(
             [res.serialized_sequence_examples for (_, res) in successful_work]))

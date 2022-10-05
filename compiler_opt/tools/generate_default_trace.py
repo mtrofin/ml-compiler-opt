@@ -144,12 +144,19 @@ def main(_):
   module_filter = re.compile(
       _MODULE_FILTER.value) if _MODULE_FILTER.value else None
 
+  csfdo_path = os.path.join(_DATA_PATH.value, 'merged.profdata')
+  replace_flags = config.flags_to_replace()
+  assert '-fprofile-instrument-use-path' not in replace_flags
+  replace_flags['-fprofile-instrument-use-path'] = csfdo_path
   cps = corpus.Corpus(
       data_path=_DATA_PATH.value,
-      module_filter=module_filter,
-      additional_flags=config.flags_to_add(),
+      additional_flags=config.flags_to_add() +
+      ('-mllvm',
+       f'-regalloc-profile-path={os.path.join(_DATA_PATH.value,"muppet_regalloc_perf_real.afdo")}'
+      ),
       delete_flags=config.flags_to_delete(),
-      replace_flags=config.flags_to_replace())
+      replace_flags=replace_flags)
+
   logging.info('Done loading module specs from corpus.')
 
   # Sampling if needed.

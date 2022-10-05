@@ -288,7 +288,7 @@ class CompilationRunner(Worker):
                launcher_path: Optional[str] = None,
                moving_average_decay_rate: float = 1,
                compilation_timeout=None, 
-               weights=dict[str, float]):
+               weights:Optional[dict[str, float]]=None):
     """Initialization of CompilationRunner class.
 
     Args:
@@ -365,19 +365,17 @@ class CompilationRunner(Worker):
     rewards = []
     policy_rewards = []
     keys = []
-    seen = set()
     for k, v in policy_result.items():
       sequence_example = v[0]
       policy_reward = v[1]
       k = k.split('.llvm.')[0]
-      weight = 1.0 if k in self._weights else 0.0
-      if not weight:
-        if k in reward_stat:
-          reward_stat.pop(k)
-        continue
-      if k in seen:
-        continue
-      seen.add(k)
+      weight = 1.0
+      if self._weights is not None:
+        weight = 1.0 if k in self._weights else 0.0
+        if not weight:
+          if k in reward_stat:
+            reward_stat.pop(k)
+          continue
       if k not in reward_stat:
         raise ValueError(
             (f'Example {k} does not exist under default policy for '
