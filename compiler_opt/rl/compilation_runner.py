@@ -34,7 +34,7 @@ from compiler_opt.rl import corpus
 from compiler_opt.rl import policy_saver
 
 _COMPILATION_TIMEOUT = flags.DEFINE_integer(
-    'compilation_timeout', 60,
+    'compilation_timeout', 600,
     'Max duration (in seconds) after which we cancel any compilation job.')
 _QUIET = flags.DEFINE_bool(
     'quiet', True, 'Whether or not to compile quietly (hiding info logging)')
@@ -186,7 +186,8 @@ def start_cancellable_process(
   with subprocess.Popen(
       cmdline,
       env=command_env,
-      stdout=(subprocess.PIPE if want_output else None)) as p:
+      stdout=(subprocess.PIPE if want_output else subprocess.DEVNULL),
+      stderr=subprocess.DEVNULL) as p:
     if cancellation_manager:
       cancellation_manager.register_process(p)
 
@@ -286,7 +287,8 @@ class CompilationRunner(Worker):
                clang_path: Optional[str] = None,
                launcher_path: Optional[str] = None,
                moving_average_decay_rate: float = 1,
-               compilation_timeout=None):
+               compilation_timeout=None, 
+               weights=dict[str, float]):
     """Initialization of CompilationRunner class.
 
     Args:
@@ -301,6 +303,7 @@ class CompilationRunner(Worker):
     self._compilation_timeout = (
         compilation_timeout or _COMPILATION_TIMEOUT.value)
     self._cancellation_manager = WorkerCancellationManager()
+    self._weights = weights
 
   # re-allow the cancellation manager accept work.
   def enable(self):
@@ -348,7 +351,8 @@ class CompilationRunner(Worker):
         default_result = self.compile_fn(
             final_cmd_line, tf_policy_path='', reward_only=bool(tf_policy_path))
         reward_stat = {
-            k: RewardStat(v[1], v[1]) for (k, v) in default_result.items()
+            k.split('.llvm.')[0]: RewardStat(v[1], v[1])
+            for (k, v) in default_result.items()
         }
 
       if tf_policy_path:
@@ -361,9 +365,19 @@ class CompilationRunner(Worker):
     rewards = []
     policy_rewards = []
     keys = []
+    seen = set()
     for k, v in policy_result.items():
       sequence_example = v[0]
       policy_reward = v[1]
+      k = k.split('.llvm.')[0]
+      weight = 1.0 if k in self._weights else 0.0
+      if not weight:
+        if k in reward_stat:
+          reward_stat.pop(k)
+        continue
+      if k in seen:
+        continue
+      seen.add(k)
       if k not in reward_stat:
         raise ValueError(
             (f'Example {k} does not exist under default policy for '
@@ -372,13 +386,14 @@ class CompilationRunner(Worker):
       moving_average_reward = reward_stat[k].moving_average_reward
       sequence_example = _overwrite_trajectory_reward(
           sequence_example=sequence_example,
-          reward=_calculate_reward(
+          reward=weight * _calculate_reward(
               policy=policy_reward, baseline=moving_average_reward))
       sequence_example_list.append(sequence_example)
       reward_stat[k].moving_average_reward = (
           moving_average_reward * self._moving_average_decay_rate +
           policy_reward * (1 - self._moving_average_decay_rate))
       rewards.append(
+          weight *
           _calculate_reward(policy=policy_reward, baseline=default_reward))
       policy_rewards.append(policy_reward)
       keys.append(k)

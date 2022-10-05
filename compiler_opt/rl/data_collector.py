@@ -115,11 +115,11 @@ class EarlyExitChecker:
       return False
 
     self._waited_time = round(time.time() - self._start_time)
-    for (data_threshold, deadline_threshold) in self._thresholds:
-      if ((collected >= self._num_modules * data_threshold) and
-          (self._waited_time >= self._deadline * deadline_threshold)):
-        return True
-    return False
+    # for (data_threshold, deadline_threshold) in self._thresholds:
+    #   if ((collected >= self._num_modules * data_threshold) and
+    #       (self._waited_time >= self._deadline * deadline_threshold)):
+    #     return True
+    return collected >= self._num_modules
 
   def wait(self, get_num_finished_work):
     """Waits until the deadline has expired or an early exit is possible.

@@ -59,6 +59,39 @@ flags.DEFINE_multi_string(
 FLAGS = flags.FLAGS
 
 
+def load_freqs():
+  import csv
+  import glob
+
+  f_to_freq = {}
+  f_to_mod = {}
+  for filename in glob.iglob('/work/muppet_corpus_stats/**', recursive=True):
+    if not filename.endswith('.stats'):
+      continue
+    with open(filename) as f:
+      filename = '/'.join(filename.split('/')[3:]).removesuffix('.stats')
+      reader = csv.reader(f)
+      for l in reader:
+        fname = l[0].split('.llvm.')[0]
+        md5 = l[1]
+        f_to_mod[fname] = filename
+        value = float(l[2])
+        f_to_freq[fname] = value
+
+  total = sum(v for _, v in f_to_freq.items())
+
+  rev_freqs = sorted([(freq, fn) for fn, freq in f_to_freq.items()], reverse=True)
+  important = []
+  t = 0.0
+  mods = set()
+  for freq, fn in rev_freqs:
+    if t > 0.99 * total:
+      break
+    t += freq
+    important.append((freq, fn))
+    mods.add(f_to_mod[fn])
+  return mods, f_to_freq
+
 @gin.configurable
 def train_eval(worker_manager_class=LocalWorkerPoolManager,
                agent_name=constant.AgentName.PPO,
@@ -102,11 +135,17 @@ def train_eval(worker_manager_class=LocalWorkerPoolManager,
   saver = policy_saver.PolicySaver(policy_dict=policy_dict)
 
   logging.info('Loading module specs from corpus at %s.', FLAGS.data_path)
+  csfdo_path = os.path.join(FLAGS.data_path, 'merged.profdata')
+  replace_flags = problem_config.flags_to_replace()
+  assert '-fprofile-instrument-use-path' not in replace_flags
+  replace_flags['-fprofile-instrument-use-path'] = csfdo_path  
+  mods, freqs = load_freqs()
   cps = corpus.Corpus(
       data_path=FLAGS.data_path,
       additional_flags=problem_config.flags_to_add(),
       delete_flags=problem_config.flags_to_delete(),
-      replace_flags=problem_config.flags_to_replace())
+      replace_flags=replace_flags,
+      module_filter=lambda x : x in mods)
   logging.info('Done loading module specs from corpus.')
 
   dataset_fn = data_reader.create_sequence_example_dataset_fn(
@@ -148,7 +187,8 @@ def train_eval(worker_manager_class=LocalWorkerPoolManager,
   with worker_manager_class(
       worker_class=problem_config.get_runner_type(),
       count=FLAGS.num_workers,
-      moving_average_decay_rate=moving_average_decay_rate) as worker_pool:
+      moving_average_decay_rate=moving_average_decay_rate,
+      weights=freqs) as worker_pool:
     data_collector = local_data_collector.LocalDataCollector(
         cps=cps,
         num_modules=num_modules,

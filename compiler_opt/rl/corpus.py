@@ -21,7 +21,7 @@ import re
 
 from absl import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import json
 import os
@@ -70,7 +70,7 @@ def _apply_cmdline_filters(
 
     option = next(option_iterator, None)
   if len(matched_replace_flags) != len(replace_flags):
-    raise ValueError('flags that were expected to be replaced were not found')
+    print('flags that were expected to be replaced were not found')
   cmdline.extend(additional_flags)
   return tuple(cmdline)
 
@@ -227,7 +227,7 @@ class Corpus:
   def __init__(self,
                *,
                data_path: str,
-               module_filter: Optional[re.Pattern] = None,
+               module_filter: Optional[Callable[[str], bool]] = None,
                additional_flags: Tuple[str, ...] = (),
                delete_flags: Tuple[str, ...] = (),
                replace_flags: Optional[Dict[str, str]] = None,
@@ -310,7 +310,7 @@ class Corpus:
 
     if module_filter:
       module_paths = [
-          name for name in module_paths if module_filter.match(name)
+          name for name in module_paths if module_filter(name)
       ]
 
     def get_cmdline(name: str):
