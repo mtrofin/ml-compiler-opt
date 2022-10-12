@@ -42,7 +42,7 @@ _QUIET = flags.DEFINE_bool(
 
 def _calculate_reward(policy: float, baseline: float) -> float:
   # This assumption allows us to imply baseline + constant.DELTA > 0.
-  assert baseline >= 0
+  #assert baseline >= 0
   return 1 - (policy + constant.DELTA) / (baseline + constant.DELTA)
 
 

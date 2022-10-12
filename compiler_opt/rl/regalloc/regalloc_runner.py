@@ -78,7 +78,9 @@ class RegAllocRunner(compilation_runner.CompilationRunner):
         cmdline.append(self._launcher_path)
       cmdline.extend([self._clang_path] + list(command_line) + [
           '-mllvm', '-regalloc-enable-advisor=development', '-mllvm',
-          '-regalloc-training-log=' + log_path, '-o', output_native_path
+          '-regalloc-training-log=' + log_path, '-o', output_native_path,
+          '-mllvm', '-regalloc-load-weight=2', '-mllvm',
+          '-regalloc-expensive-remat-weight=-4'
       ])
 
       if tf_policy_path:

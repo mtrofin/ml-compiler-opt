@@ -87,6 +87,7 @@ def main(_):
             '-mllvm',
             '-regalloc-dump-profile=' + stats_output,
         )
+        # a_policy='/google/src/cloud/mtrofin/ra_train/google3/third_party/crosstool/v18/llvm_unstable/toolchain/bin/ml/negative_262K'
         try:
           t1 = time.time()
           self.compile_fn(
