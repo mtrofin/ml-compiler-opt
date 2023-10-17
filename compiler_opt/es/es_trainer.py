@@ -14,10 +14,12 @@
 # limitations under the License.
 """Local ES trainer."""
 
+from typing import Optional
 from absl import app, flags, logging
 import gin
 
 from compiler_opt.es import es_trainer_lib
+from compiler_opt.rl import registry
 
 _GIN_FILES = flags.DEFINE_multi_string(
     "gin_files", [], "List of paths to gin configuration files.")
@@ -31,7 +33,9 @@ def main(_):
       _GIN_FILES.value, bindings=_GIN_BINDINGS.value, skip_unknown=False)
   logging.info(gin.config_str())
 
-  final_weights = es_trainer_lib.train()
+  problem_config = registry.get_configuration()
+  final_weights = es_trainer_lib.train(
+      worker_class=problem_config.get_runner_type())
 
   logging.info("Final Weights:")
   logging.info(", ".join(final_weights))

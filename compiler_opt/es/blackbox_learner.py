@@ -14,6 +14,7 @@
 # limitations under the License.
 """Class for coordinating blackbox optimization."""
 
+import functools
 import os
 from absl import logging
 import concurrent.futures
@@ -260,7 +261,7 @@ class BlackboxLearner:
     compile_args = zip(perturbations, self._samples)
 
     _, futures = buffered_scheduler.schedule_on_worker_pool(
-        action=lambda w, v: w.compile(v[0], v[1]),
+        action=lambda w, v: w.es_compile(v[0], v[1]),
         jobs=compile_args,
         worker_pool=pool)
 
@@ -272,27 +273,6 @@ class BlackboxLearner:
           not_done, return_when=concurrent.futures.FIRST_COMPLETED)
 
     return futures
-
-  def _get_policy_as_bytes(self,
-                           perturbation: npt.NDArray[np.float32]) -> bytes:
-    sm = tf.saved_model.load(self._tf_policy_path)
-    # devectorize the perturbation
-    policy_utils.set_vectorized_parameters_for_policy(sm, perturbation)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-      sm_dir = os.path.join(tmpdir, 'sm')
-      tf.saved_model.save(sm, sm_dir, signatures=sm.signatures)
-      src = os.path.join(self._tf_policy_path, policy_saver.OUTPUT_SIGNATURE)
-      dst = os.path.join(sm_dir, policy_saver.OUTPUT_SIGNATURE)
-      tf.io.gfile.copy(src, dst)
-
-      # convert to tflite
-      tfl_dir = os.path.join(tmpdir, 'tfl')
-      policy_saver.convert_mlgo_model(sm_dir, tfl_dir)
-
-      # create and return policy
-      policy_obj = policy_saver.Policy.from_filesystem(tfl_dir)
-      return policy_obj.policy
 
   def run_step(self, pool: FixedWorkerPool) -> None:
     """Run a single step of blackbox learning.
@@ -308,14 +288,7 @@ class BlackboxLearner:
           p for p in initial_perturbations for p in (p, -p)
       ]
 
-    # convert to bytes for compile job
-    # TODO: current conversion is inefficient.
-    # consider doing this on the worker side
-    perturbations_as_bytes = []
-    for perturbation in initial_perturbations:
-      perturbations_as_bytes.append(self._get_policy_as_bytes(perturbation))
-
-    results = self._get_results(pool, perturbations_as_bytes)
+    results = self._get_results(pool, initial_perturbations)
     rewards = self._get_rewards(results)
 
     num_pruned = _prune_skipped_perturbations(initial_perturbations, rewards)

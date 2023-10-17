@@ -14,18 +14,21 @@
 # limitations under the License.
 """Local ES trainer."""
 
-from absl import flags, logging
 import functools
+import os
+import tempfile
+from typing import Optional
+
 import gin
 import tensorflow as tf
-import os
+from absl import flags, logging
 
+from compiler_opt.distributed import worker
 from compiler_opt.distributed.local import local_worker_manager
-from compiler_opt.es import blackbox_optimizers
-from compiler_opt.es import gradient_ascent_optimization_algorithms
-from compiler_opt.es import blackbox_learner
-from compiler_opt.es import policy_utils
-from compiler_opt.rl import policy_saver, corpus
+from compiler_opt.es import (blackbox_learner, blackbox_optimizers,
+                             gradient_ascent_optimization_algorithms,
+                             policy_utils)
+from compiler_opt.rl import compilation_runner, corpus, policy_saver, registry
 
 POLICY_NAME = "policy"
 
@@ -42,15 +45,8 @@ _GRAD_REG_TYPE = flags.DEFINE_string(
     "grad_reg_type", "ridge",
     "Regularization method to use with regression gradient.")
 _GRADIENT_ASCENT_OPTIMIZER_TYPE = flags.DEFINE_string(
-    "gradient_ascent_optimizer_type", None,
+    "gradient_ascent_optimizer_type", 'adam',
     "Gradient ascent optimization algorithm: 'momentum' or 'adam'")
-flags.mark_flag_as_required("gradient_ascent_optimizer_type")
-_GREEDY = flags.DEFINE_bool(
-    "greedy",
-    None,
-    "Whether to construct a greedy policy (argmax). \
-      If False, a sampling-based policy will be used.",
-    required=True)
 _MOMENTUM = flags.DEFINE_float(
     "momentum", 0.0, "Momentum for momentum gradient ascent optimizer.")
 _OUTPUT_PATH = flags.DEFINE_string("output_path", "",
@@ -58,12 +54,48 @@ _OUTPUT_PATH = flags.DEFINE_string("output_path", "",
 _PRETRAINED_POLICY_PATH = flags.DEFINE_string(
     "pretrained_policy_path", None,
     "The path of the pretrained policy. If not provided, it will \
-        construct a new policy with randomly initialized weights.")
+        construct a new policy with randomly initialized weights."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                )
 _REQUEST_DEADLINE = flags.DEFINE_float(
     "request_deadline", 30.0, "Deadline in seconds for requests \
-    to the data collection requests.")
+    to the data collection requests."                                                                                                                                                                                                                                                                                                        )
 _TRAIN_CORPORA = flags.DEFINE_string("train_corpora", "",
                                      "List of paths to training corpora")
+
+
+class ESWorker(worker.Worker):
+  def __init__(self, *args,
+                underlying_type: type[compilation_runner.CompilationRunner],
+                policy_config: dict, **kwargs):
+    self._policy = policy_utils.create_actor_policy(**policy_config)
+    self._saver = policy_saver.PolicySaver({POLICY_NAME: self._policy})
+    self._template_dir = tempfile.mkdtemp()
+    self._saver.save(self._template_dir)
+    self._runner = underlying_type(*args, **kwargs)
+
+  def es_compile(self, loaded_module_spec: corpus.LoadedModuleSpec,
+                  params: list[float],
+                  baseline_score: Optional[float]) -> float:
+    with tempfile.TemporaryDirectory() as tempdir:
+      final_cmd_line = loaded_module_spec.build_command_line(tempdir)
+      if baseline_score is None:
+        baseline_score = self._runner.compile_fn(
+            final_cmd_line,
+            tf_policy_path='',
+            reward_only=True,
+            workdir=tempdir)
+      smdir = os.path.join(tempdir, 'sm')
+      my_model = tf.saved_model.load(
+          os.path.join(self._template_dir, POLICY_NAME))
+      policy_utils.set_vectorized_parameters_for_policy(my_model, params)
+      tf.saved_model.save(my_model, smdir)
+      policy_saver.convert_saved_model(smdir, smdir)
+      new_score = self._runner.compile_fn(
+          final_cmd_line,
+          tf_policy_path=os.path.join(smdir, policy_saver.TFLITE_MODEL_NAME),
+          reward_only=True,
+          workdir=tempdir)
+      return compilation_runner._calculate_reward(
+          policy=new_score, baseline=baseline_score)
 
 
 @gin.configurable
@@ -80,7 +112,8 @@ def train(additional_compilation_flags=(),
     tf.io.gfile.makedirs(_OUTPUT_PATH.value)
 
   # Construct the policy and upload it
-  policy = policy_utils.create_actor_policy(greedy=_GREEDY.value)
+  policy_config = gin.get_bindings(policy_utils.create_actor_policy)
+  policy = policy_utils.create_actor_policy(**policy_config)
   saver = policy_saver.PolicySaver({POLICY_NAME: policy})
 
   # Save the policy
@@ -93,8 +126,6 @@ def train(additional_compilation_flags=(),
     logging.info("Use random parameters")
     initial_parameters = policy_utils.get_vectorized_parameters_from_policy(
         policy)
-    logging.info("Parameter dimension: %s", initial_parameters.shape)
-    logging.info("Initial parameters: %s", initial_parameters)
   else:
     # Read the parameters from the pretrained policy
     logging.info("Reading policy parameters from %s",
@@ -112,17 +143,17 @@ def train(additional_compilation_flags=(),
   logging.info("Parameter dimension: %s", initial_parameters.shape)
   logging.info("Initial parameters: %s", initial_parameters)
 
-  cps = corpus.create_corpus_for_testing(
-      location=_TRAIN_CORPORA.value,
-      elements=[corpus.ModuleSpec(name="smth", size=1)],
-      additional_flags=additional_compilation_flags,
-      delete_flags=delete_compilation_flags)
+  problem_config = registry.get_configuration()
+  cps = corpus.Corpus(
+      data_path=_TRAIN_CORPORA.value,
+      additional_flags=problem_config.flags_to_add(),
+      delete_flags=problem_config.flags_to_delete(),
+      replace_flags=problem_config.flags_to_replace())
 
   # Construct policy saver
-  saved_policy = policy_utils.create_actor_policy(greedy=True)
   policy_saver_function = functools.partial(
       policy_utils.save_policy,
-      policy=saved_policy,
+      policy=policy,
       save_folder=os.path.join(_OUTPUT_PATH.value, "saved_policies"))
 
   # Get learner config
@@ -149,7 +180,7 @@ def train(additional_compilation_flags=(),
             learner_config.step_size, _BETA1.value, _BETA2.value))
   else:
     logging.info("No gradient ascent \
-                 optimizer selected. Stopping.")
+                 optimizer selected. Stopping."                                                                                                                                                                                                                                                                                          )
     return
   # ----------------------------------------------------------------------------
 
@@ -220,8 +251,10 @@ def train(additional_compilation_flags=(),
                learner_config.total_steps)
 
   with local_worker_manager.LocalWorkerPoolManager(
-      worker_class, learner_config.total_num_perturbations, arg="",
-      kwarg="") as pool:
+      ESWorker,
+      learner_config.total_num_perturbations,
+      underlying_type=worker_class,
+      policy_config=policy_config) as pool:
     for _ in range(learner_config.total_steps):
       learner.run_step(pool)
 
