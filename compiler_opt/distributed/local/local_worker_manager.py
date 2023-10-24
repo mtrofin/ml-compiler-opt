@@ -34,8 +34,11 @@ import functools
 import multiprocessing
 import psutil
 import threading
+import sys
 
+from absl import flags
 from absl import logging
+
 # pylint: disable=unused-import
 from compiler_opt.distributed import worker
 
@@ -114,6 +117,7 @@ def _run_impl(pipe: connection.Connection, worker_class: SerializedClass, *args,
 def _run(pipe: connection.Connection, worker_class: SerializedClass, *args,
          **kwargs):
   try:
+    flags.FLAGS(sys.argv)
     _run_impl(pipe, worker_class, *args, **kwargs)
   except BaseException as e:
     logging.error(e)

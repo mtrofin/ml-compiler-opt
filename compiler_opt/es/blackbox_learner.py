@@ -136,7 +136,6 @@ class BlackboxLearner:
                model_weights: npt.NDArray[np.float32],
                config: BlackboxLearnerConfig,
                initial_step: int = 0,
-               deadline: float = 30.0,
                seed: Optional[int] = None):
     """Construct a BlackboxLeaner.
 
@@ -160,14 +159,13 @@ class BlackboxLearner:
     self._model_weights = model_weights
     self._config = config
     self._step = initial_step
-    self._deadline = deadline
     self._seed = seed
 
-    # While we're waiting for the ES requests, we can
-    # collect samples for the next round of training.
-    self._samples = []
-
     self._summary_writer = tf.summary.create_file_writer(output_dir)
+    # hack
+    self._baseline_scores: dict[str, float] = {
+        'score-and-snippet-op2.o': 277067.5
+    }
 
   def _get_perturbations(self) -> List[npt.NDArray[np.float32]]:
     """Get perturbations for the model weights."""
@@ -186,7 +184,7 @@ class BlackboxLearner:
 
     for i in range(len(results)):
       if not results[i].exception():
-        rewards[i] = results[i].result()
+        rewards[i] = results[i].result().reward
       else:
         logging.info('Error retrieving result from future: %s',
                      str(results[i].exception()))
@@ -246,22 +244,30 @@ class BlackboxLearner:
   def get_model_weights(self) -> npt.NDArray[np.float32]:
     return self._model_weights
 
+  def _get_baseline_score(self, mod_name:str)->Optional[float]:
+    if mod_name not in self._baseline_scores:
+      return None
+    return self._baseline_scores[mod_name]
+
   def _get_results(
       self, pool: FixedWorkerPool,
       perturbations: List[bytes]) -> List[concurrent.futures.Future]:
-    if not self._samples:
-      for _ in range(self._config.total_num_perturbations):
-        sample = self._sampler.sample(self._config.num_ir_repeats_within_worker)
-        self._samples.append(sample)
-        # add copy of sample for antithetic perturbation pair
-        if self._config.est_type == (
-            blackbox_optimizers.EstimatorType.ANTITHETIC):
-          self._samples.append(sample)
+    samples:list[corpus.LoadedModuleSpec] = []
+    samples = [
+        self._sampler.load_module_spec(m)
+        for m in self._sampler.sample(self._config.total_num_perturbations)
+    ]
+    if self._config.est_type == (
+        blackbox_optimizers.EstimatorType.ANTITHETIC):
+      samples.extend(samples)
 
-    compile_args = zip(perturbations, self._samples)
+    compile_args = zip(perturbations, samples)
 
     _, futures = buffered_scheduler.schedule_on_worker_pool(
-        action=lambda w, v: w.es_compile(v[0], v[1]),
+        action=lambda w, v: w.es_compile(
+            params=v[0],
+            loaded_module_spec=v[1],
+            baseline_score=self._get_baseline_score(v[1].name)),
         jobs=compile_args,
         worker_pool=pool)
 
@@ -271,6 +277,10 @@ class BlackboxLearner:
       # update lists as work gets done
       _, not_done = concurrent.futures.wait(
           not_done, return_when=concurrent.futures.FIRST_COMPLETED)
+    for i in range(len(futures)):
+      name = samples[i].name
+      if futures[i].exception() is None and name not in self._baseline_scores:
+        self._baseline_scores[name] = futures[i].result().baseline
 
     return futures
 

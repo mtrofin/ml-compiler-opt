@@ -14,10 +14,11 @@
 # limitations under the License.
 """Local ES trainer."""
 
+import dataclasses
 import functools
 import os
 import tempfile
-from typing import Optional
+from typing import Callable, Optional
 
 import gin
 import tensorflow as tf
@@ -25,10 +26,15 @@ from absl import flags, logging
 
 from compiler_opt.distributed import worker
 from compiler_opt.distributed.local import local_worker_manager
-from compiler_opt.es import (blackbox_learner, blackbox_optimizers,
-                             gradient_ascent_optimization_algorithms,
-                             policy_utils)
-from compiler_opt.rl import compilation_runner, corpus, policy_saver, registry
+from compiler_opt.es import blackbox_learner
+from compiler_opt.es import blackbox_optimizers
+from compiler_opt.es import gradient_ascent_optimization_algorithms
+from compiler_opt.es import policy_utils
+from compiler_opt.rl import compilation_runner
+from compiler_opt.rl import corpus
+from compiler_opt.rl import policy_saver
+from compiler_opt.rl import registry
+
 
 POLICY_NAME = "policy"
 
@@ -55,55 +61,67 @@ _PRETRAINED_POLICY_PATH = flags.DEFINE_string(
     "pretrained_policy_path", None,
     "The path of the pretrained policy. If not provided, it will \
         construct a new policy with randomly initialized weights."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                )
-_REQUEST_DEADLINE = flags.DEFINE_float(
-    "request_deadline", 30.0, "Deadline in seconds for requests \
-    to the data collection requests."                                                                                                                                                                                                                                                                                                        )
 _TRAIN_CORPORA = flags.DEFINE_string("train_corpora", "",
                                      "List of paths to training corpora")
 
 
+@dataclasses.dataclass(frozen=True)
+class ESResult:
+  baseline: float
+  reward: float
+
+
 class ESWorker(worker.Worker):
-  def __init__(self, *args,
-                underlying_type: type[compilation_runner.CompilationRunner],
-                policy_config: dict, **kwargs):
-    self._policy = policy_utils.create_actor_policy(**policy_config)
-    self._saver = policy_saver.PolicySaver({POLICY_NAME: self._policy})
+
+  def __init__(self, *, all_gin):
+    gin.parse_config(all_gin)
+    problem_config = registry.get_configuration()
+    self._runner = problem_config.get_runner_type()()
+    policy = policy_utils.create_actor_policy()
+    saver = policy_saver.PolicySaver({POLICY_NAME: policy})
     self._template_dir = tempfile.mkdtemp()
-    self._saver.save(self._template_dir)
-    self._runner = underlying_type(*args, **kwargs)
+    saver.save(self._template_dir)
+
 
   def es_compile(self, loaded_module_spec: corpus.LoadedModuleSpec,
-                  params: list[float],
-                  baseline_score: Optional[float]) -> float:
+                 params: list[float],
+                 baseline_score: Optional[float]) -> ESResult:
     with tempfile.TemporaryDirectory() as tempdir:
       final_cmd_line = loaded_module_spec.build_command_line(tempdir)
       if baseline_score is None:
-        baseline_score = self._runner.compile_fn(
+        baseline_score_dict = self._runner.compile_fn(
             final_cmd_line,
             tf_policy_path='',
             reward_only=True,
             workdir=tempdir)
+        baseline_score = sum(v for _, (__, v) in baseline_score_dict.items())
       smdir = os.path.join(tempdir, 'sm')
       my_model = tf.saved_model.load(
           os.path.join(self._template_dir, POLICY_NAME))
       policy_utils.set_vectorized_parameters_for_policy(my_model, params)
-      tf.saved_model.save(my_model, smdir)
-      policy_saver.convert_saved_model(smdir, smdir)
+      tf.saved_model.save(my_model, smdir, signatures=my_model.signatures)
+      tflitedir = os.path.join(tempdir, 'tflite')
+      policy_saver.convert_saved_model(
+          smdir, os.path.join(tflitedir, policy_saver.TFLITE_MODEL_NAME))
+      tf.io.gfile.copy(
+          os.path.join(self._template_dir, POLICY_NAME,
+                       policy_saver.OUTPUT_SIGNATURE),
+          os.path.join(tflitedir, policy_saver.OUTPUT_SIGNATURE))
       new_score = self._runner.compile_fn(
           final_cmd_line,
-          tf_policy_path=os.path.join(smdir, policy_saver.TFLITE_MODEL_NAME),
+          tf_policy_path=tflitedir,
           reward_only=True,
           workdir=tempdir)
-      return compilation_runner._calculate_reward(
-          policy=new_score, baseline=baseline_score)
+      new_score_aggregate = sum(v for _, (__, v) in new_score.items())
+      return ESResult(
+          baseline=baseline_score,
+          reward=compilation_runner._calculate_reward(
+              policy=new_score_aggregate, baseline=baseline_score))
 
 
 @gin.configurable
-def train(additional_compilation_flags=(),
-          delete_compilation_flags=(),
-          worker_class=None):
+def train(worker_class=None):
   """Train with ES."""
-
   if not _TRAIN_CORPORA.value:
     raise ValueError("Need to supply nonempty train corpora.")
 
@@ -112,8 +130,7 @@ def train(additional_compilation_flags=(),
     tf.io.gfile.makedirs(_OUTPUT_PATH.value)
 
   # Construct the policy and upload it
-  policy_config = gin.get_bindings(policy_utils.create_actor_policy)
-  policy = policy_utils.create_actor_policy(**policy_config)
+  policy = policy_utils.create_actor_policy()
   saver = policy_saver.PolicySaver({POLICY_NAME: policy})
 
   # Save the policy
@@ -180,7 +197,7 @@ def train(additional_compilation_flags=(),
             learner_config.step_size, _BETA1.value, _BETA2.value))
   else:
     logging.info("No gradient ascent \
-                 optimizer selected. Stopping."                                                                                                                                                                                                                                                                                          )
+                 optimizer selected. Stopping."                                                                                                                                                                                                                                                                                                                                                                                        )
     return
   # ----------------------------------------------------------------------------
 
@@ -240,8 +257,7 @@ def train(additional_compilation_flags=(),
       policy_saver_fn=policy_saver_function,
       model_weights=init_current_input,
       config=learner_config,
-      initial_step=init_iteration,
-      deadline=_REQUEST_DEADLINE.value)
+      initial_step=init_iteration)
 
   if not worker_class:
     logging.info("No Worker class selected. Stopping.")
@@ -252,9 +268,8 @@ def train(additional_compilation_flags=(),
 
   with local_worker_manager.LocalWorkerPoolManager(
       ESWorker,
-      learner_config.total_num_perturbations,
-      underlying_type=worker_class,
-      policy_config=policy_config) as pool:
+      learner_config.total_num_perturbations * 2,
+      all_gin=gin.config_str()) as pool:
     for _ in range(learner_config.total_steps):
       learner.run_step(pool)
 

@@ -144,13 +144,9 @@ class LocalDataCollector(data_collector.DataCollector):
     self._schedule_jobs(policy, model_id, sampled_modules)
 
     def wait_for_termination():
-      early_exit = self._exit_checker_ctor(num_modules=self._num_modules)
-
-      def get_num_finished_work():
-        finished_work = sum(res.done() for res in self._current_futures)
-        return finished_work
-
-      return early_exit.wait(get_num_finished_work)
+      start_time = time.time()
+      concurrent.futures.wait(self._current_futures)
+      return time.time() - start_time
 
     wait_seconds = wait_for_termination()
     current_work = list(zip(sampled_modules, self._current_futures))

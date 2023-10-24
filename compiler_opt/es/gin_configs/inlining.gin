@@ -9,9 +9,12 @@ ActorDistributionNetwork.fc_layer_params=(64, 64, 64, 64)
 ActorDistributionNetwork.dropout_layer_params=None
 ActorDistributionNetwork.activation_fn=@tf.keras.activations.relu
 
-inlining.config.get_observation_processing_layer_creator.quantile_file_dir='/x/corpus/vocab/'
+inlining.config.get_observation_processing_layer_creator.quantile_file_dir='/work/inline_corpus/vocab/'
 inlining.config.get_observation_processing_layer_creator.with_sqrt = False
 inlining.config.get_observation_processing_layer_creator.with_z_score_normalization = False
 
+BlackboxLearnerConfig.total_num_perturbations = 50
 policy_utils.create_actor_policy.actor_network_ctor = @actor_distribution_network.ActorDistributionNetwork
 policy_utils.create_actor_policy.greedy = True
+
+problem_config.flags_to_add.add_flags=('-mllvm', '-load-ctx-prof=/work/inline_corpus/muppet.structured.stripped.json', '-mllvm', '-avail-extern-to-local')

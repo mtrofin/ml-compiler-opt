@@ -71,43 +71,41 @@ class InliningRunner(compilation_runner.CompilationRunner):
 
     working_dir = tempfile.mkdtemp(dir=workdir)
 
-    log_path = os.path.join(working_dir, 'log')
-    output_native_path = os.path.join(working_dir, 'native')
+    log_path = '/dev/null'
+    output_native_path = '/dev/null'
+    score_dump = os.path.join(working_dir, 'scores')
 
-    native_size = 0
+    score = 0
     cmdline = []
     if self._launcher_path:
       cmdline.append(self._launcher_path)
     cmdline.extend([self._clang_path] + list(command_line) + [
         '-mllvm', '-enable-ml-inliner=development', '-mllvm', '-training-log=' +
-        log_path, '-o', output_native_path
+        log_path, '-o', output_native_path, '-mllvm', '-dump-reward=' +
+        score_dump
     ])
     if tf_policy_path:
-      cmdline.extend(
-          ['-mllvm', '-ml-inliner-model-under-training=' + tf_policy_path])
+      cmdline.extend([
+          '-mllvm',
+          '-ml-inliner-model-under-training=' + tf_policy_path,
+          '-mllvm',
+          '-inliner-scc-level=1',
+      ])
     compilation_runner.start_cancellable_process(cmdline,
                                                  self._compilation_timeout,
                                                  self._cancellation_manager)
-    cmdline = [self._llvm_size_path, output_native_path]
-    output_bytes = compilation_runner.start_cancellable_process(
-        cmdline,
-        timeout=self._compilation_timeout,
-        cancellation_manager=self._cancellation_manager,
-        want_output=True)
-    if not output_bytes:
-      raise RuntimeError(f'Empty llvm-size output: {" ".join(cmdline)}')
-    output = output_bytes.decode('utf-8')
-    tmp = output.split('\n')
-    if len(tmp) != 3:
-      raise RuntimeError(f'Wrong llvm-size output {output}')
-    tmp = tmp[1].split('\t')
-    native_size = int(tmp[0])
+    with open(score_dump) as f:
+      lines = f.readlines()
+      latency = float(lines[0].strip())
+      cache_pressure = float(lines[1].strip())
+      print(f'latency: {latency}, pressure: {cache_pressure}')
+    score = latency
 
-    if native_size == 0:
+    if score == 0:
       return {}
 
     if reward_only:
-      return {_DEFAULT_IDENTIFIER: (None, native_size)}
+      return {_DEFAULT_IDENTIFIER: (None, score)}
 
     result = log_reader.read_log_as_sequence_examples(log_path)
     if len(result) != 1:
@@ -117,4 +115,4 @@ class InliningRunner(compilation_runner.CompilationRunner):
     if not sequence_example.HasField('feature_lists'):
       return {}
 
-    return {_DEFAULT_IDENTIFIER: (sequence_example, native_size)}
+    return {_DEFAULT_IDENTIFIER: (sequence_example, score)}
