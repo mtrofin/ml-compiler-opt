@@ -376,8 +376,8 @@ class MonteCarloBlackboxOptimizer(StatefulOptimizer):
     # in that code, the denominator for antithetic was num_top_directions.
     # we maintain compatibility for now so that the same hyperparameters
     # currently used in Toaster will have the same effect
-    if self.est_type == EstimatorType.ANTITHETIC and \
-    len(top_ps) < len(perturbations):
+    if self.est_type == EstimatorType.ANTITHETIC and len(top_ps) < len(
+        perturbations):
       gradient *= 2
     # Use the gradient ascent optimizer to compute the next parameters with the
     # gradients

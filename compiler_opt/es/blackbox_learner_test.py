@@ -174,9 +174,15 @@ class BlackboxLearnerTests(absltest.TestCase):
 
   def test_prune_skipped_perturbations(self):
     perturbations = [1, 2, 3, 4, 5]
-    rewards = [1, None, 1, None, 1]
-    blackbox_learner._prune_skipped_perturbations(perturbations, rewards)  # pylint: disable=protected-access
+    rewards = [-1, None, -3, None, -5]
+    blackbox_learner._prune_skipped_perturbations(perturbations, rewards, False)  # pylint: disable=protected-access
     self.assertListEqual(perturbations, [1, 3, 5])
+    self.assertListEqual(rewards, [-1, -3, -5])
+    perturbations = [1, -1, 2, -2, 3, -3, 4, -4]
+    rewards = [10, None, None, 20, None, None, 40, 80]
+    blackbox_learner._prune_skipped_perturbations(perturbations, rewards, True)  # pylint: disable=protected-access
+    self.assertListEqual(perturbations, [4, -4])
+    self.assertListEqual(rewards, [40, 80])
 
   def test_run_step(self):
     with local_worker_manager.LocalWorkerPoolManager(

@@ -32,6 +32,7 @@ import cloudpickle
 import dataclasses
 import functools
 import multiprocessing
+import os
 import psutil
 import threading
 import sys

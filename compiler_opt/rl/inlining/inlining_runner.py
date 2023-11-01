@@ -88,8 +88,8 @@ class InliningRunner(compilation_runner.CompilationRunner):
       cmdline.extend([
           '-mllvm',
           '-ml-inliner-model-under-training=' + tf_policy_path,
-          '-mllvm',
-          '-inliner-scc-level=1',
+          # '-mllvm',
+          # '-inliner-scc-level=5',
       ])
     compilation_runner.start_cancellable_process(cmdline,
                                                  self._compilation_timeout,

@@ -16,6 +16,7 @@
 
 import functools
 import os
+import typing
 from absl import logging
 import concurrent.futures
 import dataclasses
@@ -23,9 +24,10 @@ import gin
 import math
 import numpy as np
 import numpy.typing as npt
+import subprocess
 import tempfile
 import tensorflow as tf
-from typing import List, Optional, Protocol
+from typing import Iterable, List, Optional, Protocol, TypeVar
 
 from compiler_opt.distributed import buffered_scheduler
 from compiler_opt.distributed.worker import FixedWorkerPool
@@ -35,7 +37,16 @@ from compiler_opt.rl import corpus
 from compiler_opt.rl import policy_saver
 
 # If less than 40% of requests succeed, skip the step.
-_SKIP_STEP_SUCCESS_RATIO = 0.4
+_SKIP_STEP_SUCCESS_RATIO = 0.1
+_REWARD_IF_TIMEOUT = -2.0
+
+
+T = TypeVar('T')
+
+
+def _interleave_list(values: Iterable[T],
+                     interleaver=lambda x: -x) -> Iterable[T]:
+  return [p for p in values for p in (p, interleaver(p))]
 
 
 @gin.configurable
@@ -84,7 +95,8 @@ class BlackboxLearnerConfig:
 
 
 def _prune_skipped_perturbations(perturbations: List[npt.NDArray[np.float32]],
-                                 rewards: List[Optional[float]]):
+                                 rewards: List[Optional[float]],
+                                 is_antithetic: bool):
   """Remove perturbations that were skipped during the training step.
 
   Perturbations may be skipped due to an early exit condition or a server error
@@ -102,9 +114,11 @@ def _prune_skipped_perturbations(perturbations: List[npt.NDArray[np.float32]],
     The number of perturbations that were pruned.
   """
   indices_to_prune = []
-  for i, reward in enumerate(rewards):
-    if reward is None:
-      indices_to_prune.append(i)
+  step = 2 if is_antithetic else 1
+  next_to_check_offset = 1 if is_antithetic else 0
+  for i in range(0, len(rewards), step):
+    if rewards[i] is None or rewards[i + next_to_check_offset] is None:
+      indices_to_prune.extend(set([i, i + next_to_check_offset]))
 
   # Iterate in reverse so that the indices remain valid
   for i in reversed(indices_to_prune):
@@ -174,7 +188,7 @@ class BlackboxLearner:
     for _ in range(self._config.total_num_perturbations):
       perturbations.append(
           rng.normal(size=(len(self._model_weights))) *
-          self._config.precision_parameter)
+          self._config.precision_parameter / np.sqrt(len(self._model_weights)))
     return perturbations
 
   def _get_rewards(
@@ -185,6 +199,9 @@ class BlackboxLearner:
     for i in range(len(results)):
       if not results[i].exception():
         rewards[i] = results[i].result().reward
+      # elif isinstance(results[i].exception(), subprocess.TimeoutExpired):
+      #   logging.info('Timeout, recording penalty')
+      #   rewards[i] = _REWARD_IF_TIMEOUT
       else:
         logging.info('Error retrieving result from future: %s',
                      str(results[i].exception()))
@@ -259,13 +276,13 @@ class BlackboxLearner:
     ]
     if self._config.est_type == (
         blackbox_optimizers.EstimatorType.ANTITHETIC):
-      samples.extend(samples)
+      samples = _interleave_list(samples, interleaver=lambda x: x)
 
     compile_args = zip(perturbations, samples)
 
     _, futures = buffered_scheduler.schedule_on_worker_pool(
         action=lambda w, v: w.es_compile(
-            params=v[0],
+            params=self._model_weights + v[0],
             loaded_module_spec=v[1],
             baseline_score=self._get_baseline_score(v[1].name)),
         jobs=compile_args,
@@ -294,21 +311,25 @@ class BlackboxLearner:
     initial_perturbations = self._get_perturbations()
     # positive-negative pairs
     if self._config.est_type == blackbox_optimizers.EstimatorType.ANTITHETIC:
-      initial_perturbations = [
-          p for p in initial_perturbations for p in (p, -p)
-      ]
+      initial_perturbations = _interleave_list(initial_perturbations)
 
     results = self._get_results(pool, initial_perturbations)
     rewards = self._get_rewards(results)
 
-    num_pruned = _prune_skipped_perturbations(initial_perturbations, rewards)
+    num_pruned = _prune_skipped_perturbations(
+        initial_perturbations, rewards,
+        self._config.est_type == blackbox_optimizers.EstimatorType.ANTITHETIC)
     logging.info('Pruned [%d]', num_pruned)
     min_num_rewards = math.ceil(_SKIP_STEP_SUCCESS_RATIO * len(results))
-    if len(rewards) < min_num_rewards:
+    if len(rewards) < 1:
       logging.warning(
           'Skipping the step, too many requests failed: %d of %d '
           'train requests succeeded (required: %d)', len(rewards), len(results),
           min_num_rewards)
+      return
+
+    if np.std(np.array(rewards)) == 0:
+      logging.warning('All the rewards have the same value. Skipping')
       return
 
     self._update_model(initial_perturbations, rewards)
