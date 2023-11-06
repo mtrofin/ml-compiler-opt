@@ -185,10 +185,12 @@ class BlackboxLearner:
     """Get perturbations for the model weights."""
     perturbations = []
     rng = np.random.default_rng(seed=self._seed)
+    # normalizer = np.sqrt(len(self._model_weights))
+    normalizer = 1
     for _ in range(self._config.total_num_perturbations):
       perturbations.append(
           rng.normal(size=(len(self._model_weights))) *
-          self._config.precision_parameter / np.sqrt(len(self._model_weights)))
+          self._config.precision_parameter / normalizer)
     return perturbations
 
   def _get_rewards(
@@ -261,7 +263,7 @@ class BlackboxLearner:
   def get_model_weights(self) -> npt.NDArray[np.float32]:
     return self._model_weights
 
-  def _get_baseline_score(self, mod_name:str)->Optional[float]:
+  def _get_baseline_score(self, mod_name: str) -> Optional[float]:
     if mod_name not in self._baseline_scores:
       return None
     return self._baseline_scores[mod_name]
@@ -269,13 +271,12 @@ class BlackboxLearner:
   def _get_results(
       self, pool: FixedWorkerPool,
       perturbations: List[bytes]) -> List[concurrent.futures.Future]:
-    samples:list[corpus.LoadedModuleSpec] = []
+    samples: list[corpus.LoadedModuleSpec] = []
     samples = [
         self._sampler.load_module_spec(m)
         for m in self._sampler.sample(self._config.total_num_perturbations)
     ]
-    if self._config.est_type == (
-        blackbox_optimizers.EstimatorType.ANTITHETIC):
+    if self._config.est_type == (blackbox_optimizers.EstimatorType.ANTITHETIC):
       samples = _interleave_list(samples, interleaver=lambda x: x)
 
     compile_args = zip(perturbations, samples)

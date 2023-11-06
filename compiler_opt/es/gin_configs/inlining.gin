@@ -5,7 +5,8 @@ include 'compiler_opt/rl/inlining/gin_configs/common.gin'
 
 # Inlining model settings
 ActorDistributionNetwork.preprocessing_combiner=@tf.keras.layers.Concatenate()
-ActorDistributionNetwork.fc_layer_params=(64, 64, 64, 64)
+# ActorDistributionNetwork.fc_layer_params=(64, 64, 64, 64)
+ActorDistributionNetwork.fc_layer_params=(32, 128)
 ActorDistributionNetwork.dropout_layer_params=None
 ActorDistributionNetwork.activation_fn=@tf.keras.activations.relu
 

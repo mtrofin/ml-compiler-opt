@@ -35,6 +35,7 @@ from compiler_opt.rl import corpus
 from compiler_opt.rl import policy_saver
 from compiler_opt.rl import registry
 
+# np.linalg.norm for the initial weights
 
 POLICY_NAME = "policy"
 
@@ -60,7 +61,7 @@ _OUTPUT_PATH = flags.DEFINE_string("output_path", "",
 _PRETRAINED_POLICY_PATH = flags.DEFINE_string(
     "pretrained_policy_path", None,
     "The path of the pretrained policy. If not provided, it will \
-        construct a new policy with randomly initialized weights."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                )
+        construct a new policy with randomly initialized weights."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  )
 _TRAIN_CORPORA = flags.DEFINE_string("train_corpora", "",
                                      "List of paths to training corpora")
 
@@ -197,7 +198,7 @@ def train(worker_class=None):
             learner_config.step_size, _BETA1.value, _BETA2.value))
   else:
     logging.info("No gradient ascent \
-                 optimizer selected. Stopping."                                                                                                                                                                                                                                                                                                                                                                                        )
+                 optimizer selected. Stopping.")
     return
   # ----------------------------------------------------------------------------
 
