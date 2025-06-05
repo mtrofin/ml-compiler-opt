@@ -298,6 +298,7 @@ class Corpus:
         of the compiler.
     """
     self._base_dir = data_path
+    self._cache = {}
     # TODO: (b/233935329) Per-corpus *fdo profile paths can be read into
     # {additional|delete}_flags here
     with tf.io.gfile.GFile(
@@ -416,6 +417,8 @@ class Corpus:
     return sampled_specs
 
   def load_module_spec(self, module_spec: ModuleSpec) -> LoadedModuleSpec:
+    if module_spec.name in self._cache:
+      return self._cache[module_spec.name]
     with tf.io.gfile.GFile(
         os.path.join(self._base_dir, module_spec.name + '.bc'), 'rb') as f:
       module_bytes = f.read()
@@ -425,11 +428,14 @@ class Corpus:
           os.path.join(self._base_dir, module_spec.name + '.thinlto.bc'),
           'rb') as f:
         thinlto_bytes = f.read()
-    return LoadedModuleSpec(
+    ret = LoadedModuleSpec(
         name=module_spec.name,
         loaded_ir=module_bytes,
         loaded_thinlto_index=thinlto_bytes,
         orig_options=module_spec.command_line)
+    self._cache[module_spec.name] = ret
+    return ret
+
 
   @property
   def module_specs(self):

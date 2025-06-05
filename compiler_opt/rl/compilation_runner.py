@@ -237,11 +237,13 @@ def start_cancellable_process(cmdline: list[str],
   with subprocess.Popen(
       cmdline,
       env=command_env,
-      stdout=(subprocess.PIPE if want_output else None)) as p:
+      stdout=(subprocess.PIPE if want_output else None),
+      stderr=(subprocess.STDOUT if want_output else None)) as p:
     if cancellation_manager:
       cancellation_manager.register_process(p)
 
     try:
+      logging.info('Timeout is: %d', timeout)
       retcode = p.wait(timeout=timeout)
     except subprocess.TimeoutExpired as e:
       logging.info('Command hit timeout: %s', shlex.join(cmdline))
@@ -253,6 +255,7 @@ def start_cancellable_process(cmdline: list[str],
 
     if retcode != 0:
       if retcode == -9:
+        logging.info('Process was explicitly killed')
         raise ProcessKilledError()
       logging.info('Command returned code %d: %s', retcode, shlex.join(cmdline))
       raise subprocess.CalledProcessError(retcode, cmdline)

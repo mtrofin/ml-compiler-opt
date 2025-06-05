@@ -7,7 +7,7 @@ include 'compiler_opt/rl/inlining/gin_configs/common.gin'
 
 # Inlining model settings
 ActorDistributionNetwork.preprocessing_combiner=@tf.keras.layers.Concatenate()
-ActorDistributionNetwork.fc_layer_params=(64, 64, 64, 64)
+ActorDistributionNetwork.fc_layer_params=(64, 128, 64)
 ActorDistributionNetwork.dropout_layer_params=None
 ActorDistributionNetwork.activation_fn=@tf.keras.activations.relu
 
@@ -17,7 +17,13 @@ inlining.config.get_observation_processing_layer_creator.with_z_score_normalizat
 
 policy_utils.create_actor_policy.actor_network_ctor = @actor_distribution_network.ActorDistributionNetwork
 
-InliningWorker.thread_count = 128
+InliningWorker.thread_count = 2
 InliningWorker.clang_path = %clang_path
 InliningWorker.llvm_size_path = %llvm_size_path
 compiler_opt.es.es_trainer_lib.train.worker_class = @InliningWorker
+
+inlining.config.get_observation_processing_layer_creator.quantile_file_dir='/x/inline_corpus/vocab_less_loss'
+
+compiler_opt.es.es_trainer_lib.train.delete_compilation_flags = ('-fprofile-sample-use', '-split-dwarf-file', '-split-dwarf-output', '-fdebug-compilation-dir', '--warning-suppression-mappings')
+compiler_opt.es.es_trainer_lib.train.replace_compilation_flags={'-use-ctx-profile':'/x/inline_corpus/fdocontrolz_ctxprof-haswell.ctxprofdata'}
+compiler_opt.es.es_trainer_lib.train.additional_compilation_flags=('-mllvm', '-ctx-profile-force-is-specialized', '-fbasic-block-address-map', '-mllvm', '-pgo-analysis-map=func-entry-count,bb-freq', '-mllvm', '--print-mlgo-score')

@@ -45,7 +45,8 @@ class InliningRunner(compilation_runner.CompilationRunner):
 
   def compile_and_get_size(self, command_line: corpus.FullyQualifiedCmdLine,
                            tf_policy_path: str | None,
-                           workdir: str) -> tuple[float, str]:
+                           workdir: str,
+                           reward_only: bool) -> tuple[float, str]:
     """Run inlining for the given IR file. Compiles by using a policy
     if tf_policy_path is not None.
 
@@ -68,8 +69,8 @@ class InliningRunner(compilation_runner.CompilationRunner):
 
     working_dir = tempfile.mkdtemp(dir=workdir)
 
-    log_path = os.path.join(working_dir, 'log')
-    output_native_path = os.path.join(working_dir, 'native')
+    log_path = '/dev/null' if reward_only else os.path.join(working_dir, 'log')
+    output_native_path = '/dev/null'
 
     native_size = 0
     cmdline = []
@@ -82,24 +83,18 @@ class InliningRunner(compilation_runner.CompilationRunner):
     if tf_policy_path:
       cmdline.extend(
           ['-mllvm', '-ml-inliner-model-under-training=' + tf_policy_path])
-    compilation_runner.start_cancellable_process(cmdline,
-                                                 self._compilation_timeout,
-                                                 self._cancellation_manager)
-    cmdline = [self._llvm_size_path, output_native_path]
-    output_bytes = compilation_runner.start_cancellable_process(
+    output = compilation_runner.start_cancellable_process(
         cmdline,
-        timeout=self._compilation_timeout,
-        cancellation_manager=self._cancellation_manager,
+        self._compilation_timeout,
+        self._cancellation_manager,
         want_output=True)
-    if not output_bytes:
-      raise RuntimeError(f'Empty llvm-size output: {" ".join(cmdline)}')
-    output = output_bytes.decode('utf-8')
-    tmp = output.split('\n')
-    if len(tmp) != 3:
-      raise RuntimeError(f'Wrong llvm-size output {output}')
-    tmp = tmp[1].split('\t')
-    native_size = int(tmp[0])
-    return native_size, log_path
+
+    for l in output.decode().split('\n'):
+      if 'Score:' in l:
+        tmp = l.strip().split(':')
+        dynamic_count = float(tmp[1])
+        break
+    return dynamic_count, log_path
 
   def compile_fn(
       self, command_line: corpus.FullyQualifiedCmdLine, tf_policy_path: str,
@@ -120,7 +115,8 @@ class InliningRunner(compilation_runner.CompilationRunner):
     """
 
     native_size, log_path = self.compile_and_get_size(command_line,
-                                                      tf_policy_path, workdir)
+                                                      tf_policy_path, workdir,
+                                                      False)
 
     if native_size == 0:
       return {}

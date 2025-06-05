@@ -84,7 +84,7 @@ class InliningWorker(worker.Worker):
 
     size, _ = self._inliner.compile_and_get_size(original_cmd_line,
                                                  tflite_policy_path,
-                                                 working_dir)
+                                                 working_dir, True)
     return size
 
   def compile(self, policy: bytes | None,
